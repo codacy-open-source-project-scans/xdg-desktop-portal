@@ -59,11 +59,6 @@ G_DEFINE_TYPE_WITH_CODE (RemoteDesktop, remote_desktop,
 typedef enum _RemoteDesktopSessionState
 {
   REMOTE_DESKTOP_SESSION_STATE_INIT,
-  REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES,
-  REMOTE_DESKTOP_SESSION_STATE_DEVICES_SELECTED,
-  REMOTE_DESKTOP_SESSION_STATE_SELECTING_SOURCES,
-  REMOTE_DESKTOP_SESSION_STATE_SOURCES_SELECTED,
-  REMOTE_DESKTOP_SESSION_STATE_STARTING,
   REMOTE_DESKTOP_SESSION_STATE_STARTED,
   REMOTE_DESKTOP_SESSION_STATE_CLOSED
 } RemoteDesktopSessionState;
@@ -85,6 +80,14 @@ typedef struct _RemoteDesktopSession
   DeviceType shared_devices;
 
   GList *streams;
+
+  gboolean clipboard_requested;
+
+  gboolean devices_selected;
+
+  gboolean sources_selected;
+
+  gboolean clipboard_enabled;
 } RemoteDesktopSession;
 
 typedef struct _RemoteDesktopSessionClass
@@ -106,16 +109,52 @@ is_remote_desktop_session (Session *session)
 gboolean
 remote_desktop_session_can_select_sources (RemoteDesktopSession *session)
 {
+  if (session->sources_selected)
+    return FALSE;
 
   switch (session->state)
     {
     case REMOTE_DESKTOP_SESSION_STATE_INIT:
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES:
-    case REMOTE_DESKTOP_SESSION_STATE_DEVICES_SELECTED:
       return TRUE;
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_SOURCES:
-    case REMOTE_DESKTOP_SESSION_STATE_SOURCES_SELECTED:
-    case REMOTE_DESKTOP_SESSION_STATE_STARTING:
+    case REMOTE_DESKTOP_SESSION_STATE_STARTED:
+    case REMOTE_DESKTOP_SESSION_STATE_CLOSED:
+      return FALSE;
+    }
+
+  g_assert_not_reached ();
+}
+
+gboolean
+remote_desktop_session_can_select_devices (RemoteDesktopSession *session)
+{
+  if (session->devices_selected)
+    return FALSE;
+
+  switch (session->state)
+    {
+    case REMOTE_DESKTOP_SESSION_STATE_INIT:
+      return TRUE;
+    case REMOTE_DESKTOP_SESSION_STATE_STARTED:
+    case REMOTE_DESKTOP_SESSION_STATE_CLOSED:
+      return FALSE;
+    }
+
+  g_assert_not_reached ();
+}
+
+gboolean
+remote_desktop_session_can_request_clipboard (RemoteDesktopSession *session)
+{
+  if (session->clipboard_requested)
+    return FALSE;
+
+  if (xdp_dbus_impl_remote_desktop_get_version (impl) < 2)
+    return FALSE;
+
+  switch (session->state)
+    {
+    case REMOTE_DESKTOP_SESSION_STATE_INIT:
+      return TRUE;
     case REMOTE_DESKTOP_SESSION_STATE_STARTED:
     case REMOTE_DESKTOP_SESSION_STATE_CLOSED:
       return FALSE;
@@ -131,15 +170,21 @@ remote_desktop_session_get_streams (RemoteDesktopSession *session)
 }
 
 void
-remote_desktop_session_selecting_sources (RemoteDesktopSession *session)
+remote_desktop_session_sources_selected (RemoteDesktopSession *session)
 {
-  session->state = REMOTE_DESKTOP_SESSION_STATE_SELECTING_SOURCES;
+  session->sources_selected = TRUE;
+}
+
+gboolean
+remote_desktop_session_is_clipboard_enabled (RemoteDesktopSession *session)
+{
+  return session->clipboard_enabled;
 }
 
 void
-remote_desktop_session_sources_selected (RemoteDesktopSession *session)
+remote_desktop_session_clipboard_requested (RemoteDesktopSession *session)
 {
-  session->state = REMOTE_DESKTOP_SESSION_STATE_SOURCES_SELECTED;
+  session->clipboard_requested = TRUE;
 }
 
 static RemoteDesktopSession *
@@ -353,10 +398,7 @@ select_devices_done (GObject *source_object,
     {
       RemoteDesktopSession *remote_desktop_session = (RemoteDesktopSession *)session;
 
-      g_assert_cmpint (remote_desktop_session->state,
-                       ==,
-                       REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES);
-      remote_desktop_session->state = REMOTE_DESKTOP_SESSION_STATE_DEVICES_SELECTED;
+      remote_desktop_session->devices_selected = TRUE;
     }
 }
 
@@ -410,31 +452,13 @@ handle_select_devices (XdpDbusRemoteDesktop *object,
   SESSION_AUTOLOCK_UNREF (session);
 
   remote_desktop_session = (RemoteDesktopSession *)session;
-  switch (remote_desktop_session->state)
+
+  if (!remote_desktop_session_can_select_devices (remote_desktop_session))
     {
-    case REMOTE_DESKTOP_SESSION_STATE_INIT:
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_SOURCES:
-    case REMOTE_DESKTOP_SESSION_STATE_SOURCES_SELECTED:
-      break;
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES:
-    case REMOTE_DESKTOP_SESSION_STATE_DEVICES_SELECTED:
       g_dbus_method_invocation_return_error (invocation,
-                                             G_DBUS_ERROR,
-                                             G_DBUS_ERROR_FAILED,
-                                             "Sources already selected");
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
-    case REMOTE_DESKTOP_SESSION_STATE_STARTING:
-    case REMOTE_DESKTOP_SESSION_STATE_STARTED:
-      g_dbus_method_invocation_return_error (invocation,
-                                             G_DBUS_ERROR,
-                                             G_DBUS_ERROR_FAILED,
-                                             "Can only select devices before starting");
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
-    case REMOTE_DESKTOP_SESSION_STATE_CLOSED:
-      g_dbus_method_invocation_return_error (invocation,
-                                             G_DBUS_ERROR,
-                                             G_DBUS_ERROR_FAILED,
-                                             "Invalid session");
+                                              G_DBUS_ERROR,
+                                              G_DBUS_ERROR_FAILED,
+                                              "Invalid state");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -467,7 +491,6 @@ handle_select_devices (XdpDbusRemoteDesktop *object,
                            quark_request_session,
                            g_object_ref (session),
                            g_object_unref);
-  remote_desktop_session->state = REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES;
 
   xdp_dbus_impl_remote_desktop_call_select_devices (impl,
                                                     request->id,
@@ -490,6 +513,7 @@ process_results (RemoteDesktopSession *remote_desktop_session,
 {
   g_autoptr(GVariantIter) streams_iter = NULL;
   uint32_t devices = 0;
+  gboolean clipboard_enabled = FALSE;
 
   if (g_variant_lookup (results, "streams", "a(ua{sv})", &streams_iter))
     {
@@ -499,6 +523,9 @@ process_results (RemoteDesktopSession *remote_desktop_session,
 
   if (g_variant_lookup (results, "devices", "u", &devices))
     remote_desktop_session->shared_devices = devices;
+
+  if (g_variant_lookup (results, "clipboard_enabled", "b", &clipboard_enabled))
+    remote_desktop_session->clipboard_enabled = clipboard_enabled;
 
   return TRUE;
 }
@@ -568,8 +595,6 @@ start_done (GObject *source_object,
     }
   else if (!session->closed)
     {
-      g_assert (remote_desktop_session->state ==
-                REMOTE_DESKTOP_SESSION_STATE_STARTING);
       g_debug ("remote desktop session owned by '%s' started", session->sender);
       remote_desktop_session->state = REMOTE_DESKTOP_SESSION_STATE_STARTED;
     }
@@ -608,22 +633,7 @@ handle_start (XdpDbusRemoteDesktop *object,
   switch (remote_desktop_session->state)
     {
     case REMOTE_DESKTOP_SESSION_STATE_INIT:
-    case REMOTE_DESKTOP_SESSION_STATE_DEVICES_SELECTED:
-    case REMOTE_DESKTOP_SESSION_STATE_SOURCES_SELECTED:
       break;
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_SOURCES:
-      g_dbus_method_invocation_return_error (invocation,
-                                             G_DBUS_ERROR,
-                                             G_DBUS_ERROR_FAILED,
-                                             "Sources not selected");
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES:
-      g_dbus_method_invocation_return_error (invocation,
-                                             G_DBUS_ERROR,
-                                             G_DBUS_ERROR_FAILED,
-                                             "Devices not selected");
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
-    case REMOTE_DESKTOP_SESSION_STATE_STARTING:
     case REMOTE_DESKTOP_SESSION_STATE_STARTED:
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
@@ -663,7 +673,6 @@ handle_start (XdpDbusRemoteDesktop *object,
                            quark_request_session,
                            g_object_ref (session),
                            g_object_unref);
-  remote_desktop_session->state = REMOTE_DESKTOP_SESSION_STATE_STARTING;
 
   xdp_dbus_impl_remote_desktop_call_start (impl,
                                            request->id,
@@ -686,16 +695,14 @@ check_notify (Session *session,
 {
   RemoteDesktopSession *remote_desktop_session = (RemoteDesktopSession *)session;
 
+  if (!remote_desktop_session->devices_selected)
+    return FALSE;
+
   switch (remote_desktop_session->state)
     {
     case REMOTE_DESKTOP_SESSION_STATE_STARTED:
       break;
     case REMOTE_DESKTOP_SESSION_STATE_INIT:
-    case REMOTE_DESKTOP_SESSION_STATE_DEVICES_SELECTED:
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_DEVICES:
-    case REMOTE_DESKTOP_SESSION_STATE_SOURCES_SELECTED:
-    case REMOTE_DESKTOP_SESSION_STATE_SELECTING_SOURCES:
-    case REMOTE_DESKTOP_SESSION_STATE_STARTING:
     case REMOTE_DESKTOP_SESSION_STATE_CLOSED:
       return FALSE;
     }
@@ -1391,7 +1398,7 @@ on_supported_device_types_changed (GObject *gobject,
 static void
 remote_desktop_init (RemoteDesktop *remote_desktop)
 {
-  xdp_dbus_remote_desktop_set_version (XDP_DBUS_REMOTE_DESKTOP (remote_desktop), 1);
+  xdp_dbus_remote_desktop_set_version (XDP_DBUS_REMOTE_DESKTOP (remote_desktop), 2);
 
   g_signal_connect (impl, "notify::supported-device-types",
                     G_CALLBACK (on_supported_device_types_changed),

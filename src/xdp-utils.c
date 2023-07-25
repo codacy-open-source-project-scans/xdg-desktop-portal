@@ -2282,7 +2282,6 @@ xdp_validate_serialized_icon (GVariant  *v,
   const char *allowed_icon_formats[] = { "png", "jpeg", "svg", NULL };
   int size;
   const char *MAX_ICON_SIZE = "512";
-  g_auto(GStrv) parts = NULL;
   gconstpointer bytes_data;
   gsize bytes_len;
   g_autoptr(GKeyFile) key_file = NULL;
@@ -2383,4 +2382,28 @@ xdp_validate_serialized_icon (GVariant  *v,
     *out_size = g_strdup_printf ("%d", size);
 
   return TRUE;
+}
+
+gboolean
+xdp_variant_contains_key (GVariant *dictionary,
+                          const char *key)
+{
+  GVariantIter iter;
+
+  g_variant_iter_init (&iter, dictionary);
+  while (TRUE)
+    {
+      g_autoptr(GVariant) entry = NULL;
+      g_autoptr(GVariant) entry_key = NULL;
+
+      entry = g_variant_iter_next_value (&iter);
+      if (!entry)
+        break;
+
+      entry_key = g_variant_get_child_value (entry, 0);
+      if (g_strcmp0 (g_variant_get_string (entry_key, NULL), key) == 0)
+        return TRUE;
+    }
+
+  return FALSE;
 }

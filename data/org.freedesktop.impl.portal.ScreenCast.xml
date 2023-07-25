@@ -62,7 +62,6 @@
         @handle: Object path for the #org.freedesktop.impl.portal.Request object representing this call
         @session_handle: Object path for the #org.freedesktop.impl.portal.Session object representing the session
         @app_id: App id of the application
-        @session_id: Session identifier
         @options: Vardict with optional further information
         @response: Numeric response
         @results: Vardict with the results of the call
@@ -116,9 +115,10 @@
               </simplelist>
             </para>
             <para>
-              If the permission for the session to persist is granted, a restore token will
-              be returned via the #org.freedesktop.portal.Request::Response signal of the
-              #org.freedesktop.portal.ScreenCast.SelectSources method.
+              If the permission for the session to persist is granted,
+              "persist_mode" will be returned via the
+              #org.freedesktop.portal.Request::Response signal of the
+              #org.freedesktop.impl.portal.ScreenCast.Start method.
             </para>
             <para>
               This option was added in version 4 of this interface.
@@ -144,7 +144,6 @@
         @session_handle: Object path for the #org.freedesktop.impl.portal.Session object representing the session
         @app_id: App id of the application
         @parent_window: Identifier for the application window, see <link linkend="parent_window">Common Conventions</link>
-        @session_id: Identifier for the screen cast session
         @options: Vardict with optional further information
         @response: Numeric response
         @results: Vardict with the results of the call

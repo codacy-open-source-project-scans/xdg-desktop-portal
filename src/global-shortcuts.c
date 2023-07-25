@@ -142,7 +142,7 @@ session_created_cb (GObject *source_object,
   g_autoptr(Request) request = data;
   Session *session;
   guint response = 2;
-  GVariant *opts;
+  g_autoptr (GVariant) results = NULL;
   gboolean should_close_session;
   GVariantBuilder results_builder;
   g_autoptr(GError) error = NULL;
@@ -157,7 +157,7 @@ session_created_cb (GObject *source_object,
 
   if (!xdp_dbus_impl_global_shortcuts_call_create_session_finish (impl,
                                                                   &response,
-                                                                  &opts,
+                                                                  &results,
                                                                   res,
                                                                   &error))
     {
@@ -185,9 +185,6 @@ session_created_cb (GObject *source_object,
       should_close_session = TRUE;
     }
 
-  GVariantDict *dict = g_variant_dict_new (opts);
-  g_variant_builder_add (&results_builder, "{sv}",
-                         "shortcuts", g_variant_dict_lookup_value (dict, "shortcuts", 0));
   g_variant_builder_add (&results_builder, "{sv}",
                          "session_handle", g_variant_new ("s", session->id));
 
@@ -270,7 +267,7 @@ handle_create_session (XdpDbusGlobalShortcuts *object,
                                                       request->id,
                                                       session->id,
                                                       xdp_app_info_get_id (request->app_info),
-                                                      options,
+                                                      g_steal_pointer (&options),
                                                       NULL,
                                                       session_created_cb,
                                                       g_object_ref (request));
@@ -329,28 +326,32 @@ xdp_verify_shortcuts (GVariant *shortcuts,
                       GError **error)
 {
   gchar *shortcut_name;
-  GVariant *values;
+  GVariant *values = NULL;
   g_autoptr(GVariantIter) iter = NULL;
 
   iter = g_variant_iter_new (shortcuts);
-  while (g_variant_iter_loop (iter, "sa{sv}", &shortcut_name, &values))
+  while (g_variant_iter_loop (iter, "(s@a{sv})", &shortcut_name, &values))
     {
       GVariantBuilder shortcut_builder;
 
       if (shortcut_name[0] == 0)
         {
-          g_set_error (error, XDG_DESKTOP_PORTAL_ERROR, XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
-                          "Unexpected empty shortcut id");
+          g_set_error (error,
+                       XDG_DESKTOP_PORTAL_ERROR,
+                       XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                       "Unexpected empty shortcut id");
           return FALSE;
         }
 
       g_variant_builder_init (&shortcut_builder, G_VARIANT_TYPE_VARDICT);
       if (!xdp_filter_options (values, &shortcut_builder,
-                              global_shortcuts_keys,
-                              G_N_ELEMENTS (global_shortcuts_keys),
-                              error))
+                               global_shortcuts_keys,
+                               G_N_ELEMENTS (global_shortcuts_keys),
+                               error))
         return FALSE;
-      g_variant_builder_add (filtered, "(sa{sv})", g_variant_builder_end (&shortcut_builder));
+      g_variant_builder_add (filtered, "(sa{sv})",
+                             shortcut_name,
+                             &shortcut_builder);
     }
   return TRUE;
 }
@@ -436,9 +437,9 @@ handle_bind_shortcuts (XdpDbusGlobalShortcuts *object,
   xdp_dbus_impl_global_shortcuts_call_bind_shortcuts (impl,
                                                       request->id,
                                                       arg_session_handle,
-                                                      shortcuts,
+                                                      g_steal_pointer (&shortcuts),
                                                       arg_parent_window,
-                                                      options,
+                                                      g_steal_pointer (&options),
                                                       NULL,
                                                       shortcuts_bound_cb,
                                                       g_object_ref (request));
@@ -588,13 +589,22 @@ activated_cb (XdpDbusImplGlobalShortcuts *impl,
               GVariant *options,
               gpointer data)
 {
+  GDBusConnection *connection = g_dbus_proxy_get_connection (G_DBUS_PROXY (impl));
   g_autoptr(Session) session = lookup_session (session_id);
   GlobalShortcutsSession *global_shortcuts_session = (GlobalShortcutsSession *)session;
 
   g_debug ("Received activated %s for %s", session_id, shortcut_id);
 
   if (global_shortcuts_session && !global_shortcuts_session->closed)
-    xdp_dbus_global_shortcuts_emit_activated (data, session_id, shortcut_id, timestamp, options);
+    g_dbus_connection_emit_signal (connection,
+                                   session->sender,
+                                   "/org/freedesktop/portal/desktop",
+                                   "org.freedesktop.portal.GlobalShortcuts",
+                                   "Activated",
+                                   g_variant_new ("(ost@a{sv})",
+                                                  session_id, shortcut_id,
+                                                  timestamp, options),
+                                   NULL);
 }
 
 static void
@@ -605,13 +615,22 @@ deactivated_cb (XdpDbusImplGlobalShortcuts *impl,
                 GVariant *options,
                 gpointer data)
 {
+  GDBusConnection *connection = g_dbus_proxy_get_connection (G_DBUS_PROXY (impl));
   g_autoptr(Session) session = lookup_session (session_id);
   GlobalShortcutsSession *global_shortcuts_session = (GlobalShortcutsSession *)session;
 
   g_debug ("Received deactivated %s for %s", session_id, shortcut_id);
 
   if (global_shortcuts_session && !global_shortcuts_session->closed)
-    xdp_dbus_global_shortcuts_emit_deactivated (data, session_id, shortcut_id, timestamp, options);
+    g_dbus_connection_emit_signal (connection,
+                                   session->sender,
+                                   "/org/freedesktop/portal/desktop",
+                                   "org.freedesktop.portal.GlobalShortcuts",
+                                   "Deactivated",
+                                   g_variant_new ("(ost@a{sv})",
+                                                  session_id, shortcut_id,
+                                                  timestamp, options),
+                                   NULL);
 }
 
 static void
@@ -620,13 +639,20 @@ shortcuts_changed_cb (XdpDbusImplGlobalShortcuts *impl,
                       GVariant *shortcuts,
                       gpointer data)
 {
+  GDBusConnection *connection = g_dbus_proxy_get_connection (G_DBUS_PROXY (impl));
   g_autoptr(Session) session = lookup_session (session_id);
   GlobalShortcutsSession *global_shortcuts_session = (GlobalShortcutsSession *)session;
 
   g_debug ("Received ShortcutsChanged %s", session_id);
 
   if (global_shortcuts_session && !global_shortcuts_session->closed)
-    xdp_dbus_global_shortcuts_emit_shortcuts_changed (data, session_id, shortcuts);
+    g_dbus_connection_emit_signal (connection,
+                                   session->sender,
+                                   "/org/freedesktop/portal/desktop",
+                                   "org.freedesktop.portal.GlobalShortcuts",
+                                   "ShortcutsChanged",
+                                   g_variant_new ("(o@a(sa{sv}))", session_id, shortcuts),
+                                   NULL);
 }
 
 GDBusInterfaceSkeleton *

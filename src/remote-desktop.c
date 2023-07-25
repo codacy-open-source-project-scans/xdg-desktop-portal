@@ -21,6 +21,7 @@
 #include "remote-desktop.h"
 #include "screen-cast.h"
 #include "request.h"
+#include "restore-token.h"
 #include "pipewire.h"
 #include "call.h"
 #include "session.h"
@@ -28,7 +29,10 @@
 #include "xdp-impl-dbus.h"
 #include "xdp-utils.h"
 
+#include <gio/gunixfdlist.h>
 #include <stdint.h>
+
+#define REMOTE_DESKTOP_TABLE "remote-desktop"
 
 typedef struct _RemoteDesktop RemoteDesktop;
 typedef struct _RemoteDesktopClass RemoteDesktopClass;
@@ -88,6 +92,12 @@ typedef struct _RemoteDesktopSession
   gboolean sources_selected;
 
   gboolean clipboard_enabled;
+
+  gboolean uses_eis;
+
+  char *restore_token;
+  PersistMode persist_mode;
+  GVariant *restore_data;
 } RemoteDesktopSession;
 
 typedef struct _RemoteDesktopSessionClass
@@ -420,9 +430,74 @@ validate_device_types (const char *key,
   return TRUE;
 }
 
+static gboolean
+validate_restore_token (const char *key,
+                        GVariant *value,
+                        GVariant *options,
+                        GError **error)
+{
+  const char *restore_token = g_variant_get_string (value, NULL);
+
+  if (!g_uuid_string_is_valid (restore_token))
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "Restore token is not a valid UUID string");
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
+validate_persist_mode (const char *key,
+                       GVariant *value,
+                       GVariant *options,
+                       GError **error)
+{
+  uint32_t mode = g_variant_get_uint32 (value);
+
+  if (mode > PERSIST_MODE_PERSISTENT)
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "Invalid persist mode %x", mode);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
 static XdpOptionKey remote_desktop_select_devices_options[] = {
   { "types", G_VARIANT_TYPE_UINT32, validate_device_types },
+  { "restore_token", G_VARIANT_TYPE_STRING, validate_restore_token },
+  { "persist_mode", G_VARIANT_TYPE_UINT32, validate_persist_mode },
 };
+
+static gboolean
+replace_remote_desktop_restore_token_with_data (Session *session,
+                                                GVariant **in_out_options,
+                                                GError **error)
+{
+  RemoteDesktopSession *remote_desktop_session = (RemoteDesktopSession *) session;
+  g_autoptr(GVariant) options = NULL;
+  PersistMode persist_mode;
+
+  options = *in_out_options;
+
+  if (!g_variant_lookup (options, "persist_mode", "u", &persist_mode))
+    persist_mode = PERSIST_MODE_NONE;
+
+  remote_desktop_session->persist_mode = persist_mode;
+  xdp_session_persistence_replace_restore_token_with_data (session,
+                                                           REMOTE_DESKTOP_TABLE,
+                                                           in_out_options,
+                                                           &remote_desktop_session->restore_token);
+
+  return TRUE;
+}
 
 static gboolean
 handle_select_devices (XdpDbusRemoteDesktop *object,
@@ -436,6 +511,7 @@ handle_select_devices (XdpDbusRemoteDesktop *object,
   g_autoptr(GError) error = NULL;
   g_autoptr(XdpDbusImplRequest) impl_request = NULL;
   GVariantBuilder options_builder;
+  GVariant *options;
 
   REQUEST_AUTOLOCK (request);
 
@@ -487,6 +563,18 @@ handle_select_devices (XdpDbusRemoteDesktop *object,
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
+  options = g_variant_builder_end (&options_builder);
+
+  /* If 'restore_token' is passed, lookup the corresponding data in the
+   * permission store and / or the GHashTable with transient permissions.
+   * Portal implementations do not have access to the restore token.
+   */
+  if (!replace_remote_desktop_restore_token_with_data (session, &options, &error))
+    {
+      g_dbus_method_invocation_return_gerror (invocation, error);
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
   g_object_set_qdata_full (G_OBJECT (request),
                            quark_request_session,
                            g_object_ref (session),
@@ -496,7 +584,7 @@ handle_select_devices (XdpDbusRemoteDesktop *object,
                                                     request->id,
                                                     arg_session_handle,
                                                     xdp_app_info_get_id (request->app_info),
-                                                    g_variant_builder_end (&options_builder),
+                                                    options,
                                                     NULL,
                                                     select_devices_done,
                                                     g_object_ref (request));
@@ -506,12 +594,25 @@ handle_select_devices (XdpDbusRemoteDesktop *object,
   return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+static void
+replace_restore_remote_desktop_data_with_token (RemoteDesktopSession *remote_desktop_session,
+                                                GVariant **in_out_results)
+{
+  xdp_session_persistence_replace_restore_data_with_token ((Session *) remote_desktop_session,
+                                                           REMOTE_DESKTOP_TABLE,
+                                                           in_out_results,
+                                                           &remote_desktop_session->persist_mode,
+                                                           &remote_desktop_session->restore_token,
+                                                           &remote_desktop_session->restore_data);
+}
+
 static gboolean
 process_results (RemoteDesktopSession *remote_desktop_session,
-                 GVariant *results,
+                 GVariant **in_out_results,
                  GError **error)
 {
   g_autoptr(GVariantIter) streams_iter = NULL;
+  GVariant *results = *in_out_results;
   uint32_t devices = 0;
   gboolean clipboard_enabled = FALSE;
 
@@ -526,6 +627,9 @@ process_results (RemoteDesktopSession *remote_desktop_session,
 
   if (g_variant_lookup (results, "clipboard_enabled", "b", &clipboard_enabled))
     remote_desktop_session->clipboard_enabled = clipboard_enabled;
+
+  replace_restore_remote_desktop_data_with_token (remote_desktop_session,
+                                                  in_out_results);
 
   return TRUE;
 }
@@ -566,7 +670,7 @@ start_done (GObject *source_object,
     {
       if (response == 0)
         {
-          if (!process_results (remote_desktop_session, results, &error))
+          if (!process_results (remote_desktop_session, &results, &error))
             {
               g_warning ("Could not start remote desktop session: %s",
                          error->message);
@@ -695,7 +799,7 @@ check_notify (Session *session,
 {
   RemoteDesktopSession *remote_desktop_session = (RemoteDesktopSession *)session;
 
-  if (!remote_desktop_session->devices_selected)
+  if (!remote_desktop_session->devices_selected || remote_desktop_session->uses_eis)
     return FALSE;
 
   switch (remote_desktop_session->state)
@@ -771,7 +875,7 @@ handle_notify_pointer_motion (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: pointer");
+                                             "Session is not allowed to call NotifyPointer methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -829,7 +933,7 @@ handle_notify_pointer_motion_absolute (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: pointer");
+                                             "Session is not allowed to call NotifyPointer methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -897,7 +1001,7 @@ handle_notify_pointer_button (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: pointer");
+                                             "Session is not allowed to call NotifyPointer methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -960,7 +1064,7 @@ handle_notify_pointer_axis (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: pointer");
+                                             "Session is not allowed to call NotifyPointer methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1018,7 +1122,7 @@ handle_notify_pointer_axis_discrete (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: pointer");
+                                             "Session is not allowed to call NotifyPointer methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1076,7 +1180,7 @@ handle_notify_keyboard_keycode (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: keyboard");
+                                             "Session is not allowed to call NotifyPointer methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1134,7 +1238,7 @@ handle_notify_keyboard_keysym (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: keyboard");
+                                             "Session is not allowed to call NotifyKeyboard methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1194,7 +1298,7 @@ handle_notify_touch_down (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: touchscreen");
+                                             "Session is not allowed to call NotifyTouch methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1264,7 +1368,7 @@ handle_notify_touch_motion (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: touchscreen");
+                                             "Session is not allowed to call NotifyTouch methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1331,7 +1435,7 @@ handle_notify_touch_up (XdpDbusRemoteDesktop *object,
       g_dbus_method_invocation_return_error (invocation,
                                              G_DBUS_ERROR,
                                              G_DBUS_ERROR_FAILED,
-                                             "Session doesn't have access to a device of type: touchscreen");
+                                             "Session is not allowed to call NotifyTouch methods");
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
@@ -1357,6 +1461,105 @@ handle_notify_touch_up (XdpDbusRemoteDesktop *object,
   return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+static XdpOptionKey remote_desktop_connect_to_eis_options[] = {
+};
+
+static gboolean
+handle_connect_to_eis (XdpDbusRemoteDesktop *object,
+                       GDBusMethodInvocation *invocation,
+                       GUnixFDList *in_fd_list,
+                       const char *arg_session_handle,
+                       GVariant *arg_options)
+{
+  Call *call = call_from_invocation (invocation);
+  Session *session;
+  RemoteDesktopSession *remote_desktop_session;
+  g_autoptr(GUnixFDList) out_fd_list = NULL;
+  g_autoptr(GError) error = NULL;
+  GVariantBuilder options_builder;
+  GVariant *fd;
+
+  session = acquire_session_from_call (arg_session_handle, call);
+  if (!session)
+    {
+      g_dbus_method_invocation_return_error (invocation,
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_ACCESS_DENIED,
+                                             "Invalid session");
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  SESSION_AUTOLOCK_UNREF (session);
+
+  if (!is_remote_desktop_session (session))
+    {
+      g_dbus_method_invocation_return_error (invocation,
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_ACCESS_DENIED,
+                                             "Invalid session");
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  remote_desktop_session = (RemoteDesktopSession *)session;
+
+  if (remote_desktop_session->uses_eis)
+    {
+      g_dbus_method_invocation_return_error (invocation,
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_FAILED,
+                                             "Session is already connected");
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  switch (remote_desktop_session->state)
+    {
+    case REMOTE_DESKTOP_SESSION_STATE_STARTED:
+      break;
+    case REMOTE_DESKTOP_SESSION_STATE_INIT:
+      g_dbus_method_invocation_return_error (invocation,
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_FAILED,
+                                             "Session is not ready");
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    case REMOTE_DESKTOP_SESSION_STATE_CLOSED:
+      g_dbus_method_invocation_return_error (invocation,
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_FAILED,
+                                             "Session is already closed");
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  g_variant_builder_init (&options_builder, G_VARIANT_TYPE_VARDICT);
+  if (!xdp_filter_options (arg_options, &options_builder,
+                           remote_desktop_connect_to_eis_options,
+                           G_N_ELEMENTS (remote_desktop_connect_to_eis_options),
+                           &error))
+    {
+      g_dbus_method_invocation_return_gerror (invocation, error);
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  if (!xdp_dbus_impl_remote_desktop_call_connect_to_eis_sync (impl,
+                                                             arg_session_handle,
+                                                             xdp_app_info_get_id (call->app_info),
+                                                             g_variant_builder_end (&options_builder),
+                                                             in_fd_list,
+                                                             &fd,
+                                                             &out_fd_list,
+                                                             NULL,
+                                                             &error))
+    {
+      g_warning ("Failed to ConnectToEIS: %s", error->message);
+      g_dbus_method_invocation_return_gerror (invocation, error);
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  remote_desktop_session->uses_eis = TRUE;
+
+  xdp_dbus_remote_desktop_complete_connect_to_eis (object, invocation, out_fd_list, fd);
+  return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
 static void
 remote_desktop_iface_init (XdpDbusRemoteDesktopIface *iface)
 {
@@ -1374,6 +1577,8 @@ remote_desktop_iface_init (XdpDbusRemoteDesktopIface *iface)
   iface->handle_notify_touch_down = handle_notify_touch_down;
   iface->handle_notify_touch_motion = handle_notify_touch_motion;
   iface->handle_notify_touch_up = handle_notify_touch_up;
+
+  iface->handle_connect_to_eis = handle_connect_to_eis;
 }
 
 static void

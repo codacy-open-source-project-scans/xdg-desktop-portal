@@ -279,7 +279,9 @@ if enable_pytest
   subdir('templates')
   pytest_files = [
     '__init__.py',
+    'test_clipboard.py',
     'test_email.py',
+    'test_globalshortcuts.py',
     'test_remotedesktop.py',
     'test_trash.py',
   ]
@@ -297,6 +299,7 @@ if enable_pytest
     pytest,
     args: ['--verbose', '--log-level=DEBUG'],
     suite: ['pytest'],
+    timeout: 120,
   )
 endif
 

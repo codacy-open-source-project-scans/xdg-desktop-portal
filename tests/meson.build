@@ -277,11 +277,22 @@ enable_pytest = pytest.found() and python.found()
 
 if enable_pytest
   subdir('templates')
+
+  pytest_args = ['--verbose', '--log-level=DEBUG']
+
+  # pytest xdist is nice because it significantly speeds up our
+  # test process, but it's not required
+  if pymod.find_installation('python3', modules: ['xdist'], required: false).found()
+    pytest_args += ['-n', 'auto']
+  endif
+
   pytest_files = [
+    'conftest.py',
     '__init__.py',
     'test_clipboard.py',
     'test_email.py',
     'test_globalshortcuts.py',
+    'test_inputcapture.py',
     'test_remotedesktop.py',
     'test_trash.py',
   ]
@@ -292,15 +303,18 @@ if enable_pytest
       copy: true,
       install: false
     )
-  endforeach
 
-  test(
-    'pytest',
-    pytest,
-    args: ['--verbose', '--log-level=DEBUG'],
-    suite: ['pytest'],
-    timeout: 120,
-  )
+    if pytest_file.startswith('test_')
+      testname = pytest_file.replace('.py', '')
+      test(
+        'pytest @0@'.format(testname),
+        pytest,
+        args: pytest_args + ['-k', testname],
+        suite: ['pytest'],
+        timeout: 120,
+      )
+    endif
+  endforeach
 endif
 
 if enable_installed_tests

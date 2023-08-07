@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 
-import os, sys, stat, random, errno, argparse
+import argparse
+import errno
+import os
+import random
+import stat
+import sys
+
 from gi.repository import Gio, GLib
 
 
@@ -120,32 +126,15 @@ def assertRaisesErrno(error_nr, func, *args, **kwargs):
         )
 
 
-def assertEmpty(a_set):
-    if len(a_set) != 0:
-        raise AssertionError("Set was not empty as expected (was: {0})".format(a_set))
-
-
-def assertEqual(a, b):
-    if a != b:
-        raise AssertionError("{} was not the expected {}".format(a, b))
-
-
-def assertIn(element, container):
-    if not element in container:
-        raise AssertionError(
-            "{} was not in the container {}".format(element, container)
-        )
-
-
 def assertFileHasContent(path, expected_content):
     with open(path) as f:
         file_content = f.read()
-        assertEqual(file_content, expected_content)
+        assert file_content == expected_content
 
 
 def assertFdHasContent(fd, expected_content):
     content = readFdContent(fd)
-    assertEqual(content, expected_content)
+    assert content == expected_content
 
 
 def assertSameStat(a, b, b_mode_mask):
@@ -216,7 +205,7 @@ def assertDirFiles(path, expected_files, exhaustive=True, volatile_files=None):
     for file in expected_files:
         if file in remaining:
             remaining.remove(file)
-        elif not file in volatile_files:
+        elif file not in volatile_files:
             raise AssertionError(
                 "Expected file {} not found in dir {} (all: {})".format(
                     file, path, found_files
@@ -276,7 +265,7 @@ class Doc:
         name = self.id
         if self.is_dir:
             return "%s(dir)" % (name)
-        elif self.content == None:
+        elif self.content is None:
             return "%s(missing)" % (name)
         else:
             return "%s" % (name)
@@ -407,7 +396,7 @@ class DocPortal:
         return docs
 
     def ensure_app_id(self, app_id, volatile=False):
-        if not app_id in self.apps:
+        if app_id not in self.apps:
             self.apps.append(app_id)
         if volatile:
             self.volatile_apps.add(app_id)
@@ -442,12 +431,12 @@ class DocPortal:
 
 
 def check_virtual_stat(info, writable=False):
-    assertEqual(info.st_uid, os.getuid())
-    assertEqual(info.st_gid, os.getgid())
+    assert info.st_uid == os.getuid()
+    assert info.st_gid == os.getgid()
     if writable:
-        assertEqual(info.st_mode, stat.S_IFDIR | 0o700)
+        assert info.st_mode == stat.S_IFDIR | 0o700
     else:
-        assertEqual(info.st_mode, stat.S_IFDIR | 0o500)
+        assert info.st_mode == stat.S_IFDIR | 0o500
 
 
 def verify_virtual_dir(path, files, volatile_files=None):
@@ -458,7 +447,7 @@ def verify_virtual_dir(path, files, volatile_files=None):
 
     assertRaises(FileNotFoundError, os.lstat, path + "/not-existing-file")
 
-    if files != None:
+    if files is not None:
         assertDirFiles(path, files, ensure_no_remaining, volatile_files)
 
 
@@ -486,8 +475,8 @@ def verify_doc(doc, app_id=None):
     for file in doc.files:
         filepath = dir + "/" + file
         info = os.lstat(filepath)
-        assertEqual(info.st_uid, os.getuid())
-        assertEqual(info.st_gid, os.getgid())
+        assert info.st_uid == os.getuid()
+        assert info.st_gid == os.getgid()
 
         assert os.access(filepath, os.R_OK)
         if doc.is_writable_by(app_id):
@@ -500,7 +489,6 @@ def verify_doc(doc, app_id=None):
         real_path = doc.real_path
         if doc.content:
             assertFileExist(main_path)
-            content = None
             assertFileHasContent(main_path, doc.content)
             assertFileHasContent(real_path, doc.content)
 
@@ -770,8 +758,8 @@ def check_directory_doc_perms(doc, app_id):
     assertFileHasContent(dir + "/realfile", "real1")
     assertFileHasContent(dir + "/readonly", "readonly")
     assertFileHasContent(dir + "/subdir/hardlink", "real1")
-    assertEqual(
-        os.lstat(dir + "/realfile").st_ino, os.lstat(dir + "/subdir/hardlink").st_ino
+    assert (
+        os.lstat(dir + "/realfile").st_ino == os.lstat(dir + "/subdir/hardlink").st_ino
     )
     assertSymlink(dir + "/symlink", "realfile")
     assertSymlink(dir + "/broken-symlink", "the-void")
@@ -801,8 +789,8 @@ def check_directory_doc_perms(doc, app_id):
         assertFdHasContent(fd2, "filedata-more")
 
         os.link(filepath, filepath2)
-        assertEqual(os.lstat(filepath).st_ino, os.lstat(filepath2).st_ino)
-        assertEqual(os.lstat(filepath).st_ino, os.fstat(fd).st_ino)
+        assert os.lstat(filepath).st_ino == os.lstat(filepath2).st_ino
+        assert os.lstat(filepath).st_ino == os.fstat(fd).st_ino
         assertFileHasContent(filepath2, "filedata-more")
         assertFileHasContent(real_filepath2, "filedata-more")
 
@@ -935,16 +923,16 @@ def export_a_doc():
     logv("exported %s as %s" % (path, doc))
 
     lookup = portal.lookup(path)
-    assertEqual(lookup, doc.id)
+    assert lookup == doc.id
 
     lookup_on_fuse = portal.lookup(doc.get_doc_path(None) + "/" + doc.filename)
-    assertEqual(lookup_on_fuse, doc.id)
+    assert lookup_on_fuse == doc.id
 
     reused_doc = portal.add(path)
     assert doc is reused_doc
 
     not_reused_doc = portal.add(path, False)
-    assert not doc is not_reused_doc
+    assert doc is not not_reused_doc
 
     # We should not be able to re-export a tmpfile
     tmppath = doc.get_doc_path(None) + "/tmpfile"
@@ -953,7 +941,7 @@ def export_a_doc():
     # Should not be able to add a tempfile on the fuse mount, or look it up
     assertRaises(GLib.Error, portal.add, tmppath)
     lookup = portal.lookup(tmppath)
-    assertEqual(lookup, "")
+    assert lookup == ""
 
     os.unlink(tmppath)
 
@@ -965,13 +953,13 @@ def export_a_named_doc(create_file):
 
     if create_file:
         lookup = portal.lookup(path)
-        assertEqual(lookup, doc.id)
+        assert lookup == doc.id
 
     reused_doc = portal.add_named(path)
     assert doc is reused_doc
 
     not_reused_doc = portal.add_named(path, False)
-    assert not doc is not_reused_doc
+    assert doc is not not_reused_doc
 
 
 def export_a_dir_doc():
@@ -980,18 +968,18 @@ def export_a_dir_doc():
     logv("exported (dir) %s as %s" % (dir, doc))
 
     lookup = portal.lookup(dir)
-    assertEqual(lookup, doc.id)
+    assert lookup == doc.id
 
     lookup_on_fuse = portal.lookup(doc.get_doc_path(None))
-    assertEqual(lookup_on_fuse, doc.id)
+    assert lookup_on_fuse == doc.id
 
     # We should not be able to portal lookup a file in the dir doc
     subpath = doc.get_doc_path(None) + "/sub"
     setFileContent(subpath, "sub")
     doc = portal.lookup(subpath)
-    assertEqual(doc, "")
+    assert doc == ""
     doc2 = portal.lookup(dir + "/sub")
-    assertEqual(doc, "")
+    assert doc2 == ""
 
     # But we should be able to re-export the file
     reexported_doc = portal.add(subpath)

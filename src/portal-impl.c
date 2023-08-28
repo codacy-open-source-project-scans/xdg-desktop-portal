@@ -37,9 +37,9 @@ typedef struct _PortalInterface {
 
 typedef struct _PortalConfig {
   char *source;
-  PortalInterface **ifaces;
+  PortalInterface **interfaces;
   size_t n_ifaces;
-  PortalInterface *dfl_portal;
+  PortalInterface *default_portal;
 } PortalConfig;
 
 static void
@@ -57,10 +57,10 @@ portal_config_free (PortalConfig *config)
   g_clear_pointer (&config->source, g_free);
 
   for (size_t i = 0; i < config->n_ifaces; i++)
-    portal_interface_free (config->ifaces[i]);
+    portal_interface_free (config->interfaces[i]);
 
-  g_clear_pointer (&config->dfl_portal, portal_interface_free);
-  g_clear_pointer (&config->ifaces, g_free);
+  g_clear_pointer (&config->default_portal, portal_interface_free);
+  g_clear_pointer (&config->interfaces, g_free);
 
   g_free (config);
 }
@@ -109,8 +109,8 @@ validate_xdg_desktop (const char *desktop)
 static char **
 get_valid_current_desktops (const char *value)
 {
-  char **tmp;
   GPtrArray *valid_desktops;
+  char **tmp;
 
   if (value == NULL)
     value = g_getenv ("XDG_CURRENT_DESKTOP");
@@ -168,8 +168,8 @@ register_portal (const char  *path,
                  gboolean     opt_verbose,
                  GError     **error)
 {
-  g_autoptr(GKeyFile) keyfile = g_key_file_new ();
   g_autoptr(PortalImplementation) impl = g_new0 (PortalImplementation, 1);
+  g_autoptr(GKeyFile) keyfile = g_key_file_new ();
   g_autofree char *basename = NULL;
   int i;
 
@@ -216,15 +216,6 @@ register_portal (const char  *path,
     }
 
   impl->use_in = g_key_file_get_string_list (keyfile, "portal", "UseIn", NULL, error);
-  if (opt_verbose && impl->use_in != NULL)
-    {
-      g_autofree char *uses = g_strjoinv (", ", impl->use_in);
-      g_warning ("Portal %s uses the deprecated UseIn key; the preferred method to "
-                 "match portal implementations to desktop environments is to use the "
-                 "portals.conf configuration file",
-                 uses);
-    }
-
   implementations = g_list_prepend (implementations, impl);
   impl = NULL;
 
@@ -278,9 +269,9 @@ sort_impl_by_use_in_and_name (gconstpointer a,
 void
 load_installed_portals (gboolean opt_verbose)
 {
-  const char *portal_dir;
-  g_autoptr(GFile) dir = NULL;
   g_autoptr(GFileEnumerator) enumerator = NULL;
+  g_autoptr(GFile) dir = NULL;
+  const char *portal_dir;
 
   /* We need to override this in the tests */
   portal_dir = g_getenv ("XDG_DESKTOP_PORTAL_DIR");
@@ -297,11 +288,13 @@ load_installed_portals (gboolean opt_verbose)
 
   while (TRUE)
     {
-      g_autoptr(GFileInfo) info = g_file_enumerator_next_file (enumerator, NULL, NULL);
+      g_autoptr(GFileInfo) info = NULL;
+      g_autoptr(GError) error = NULL;
       g_autoptr(GFile) child = NULL;
       g_autofree char *path = NULL;
       const char *name;
-      g_autoptr(GError) error = NULL;
+
+      info = g_file_enumerator_next_file (enumerator, NULL, NULL);
 
       if (info == NULL)
         break;
@@ -329,20 +322,27 @@ load_portal_configuration_for_dir (gboolean    opt_verbose,
                                    const char *base_directory,
                                    const char *portal_file)
 {
-  g_autofree char *path = g_build_filename (base_directory, portal_file, NULL);
-  g_autoptr(GKeyFile) key_file = g_key_file_new ();
+  g_autoptr(GKeyFile) key_file = NULL;
+  g_autofree char *path = NULL;
+  g_auto(GStrv) ifaces = NULL;
+
+  key_file = g_key_file_new ();
+  path = g_build_filename (base_directory, portal_file, NULL);
 
   g_debug ("Looking for portals configuration in '%s'", path);
   if (!g_key_file_load_from_file (key_file, path, G_KEY_FILE_NONE, NULL))
     return NULL;
 
-  g_auto(GStrv) ifaces = g_key_file_get_keys (key_file, "preferred", NULL, NULL);
+  ifaces = g_key_file_get_keys (key_file, "preferred", NULL, NULL);
 
   if (ifaces != NULL)
     {
-      g_autoptr(GPtrArray) interfaces = g_ptr_array_new_full (g_strv_length (ifaces) + 1, NULL);
-      g_autoptr(PortalConfig) conf = g_new0 (PortalConfig, 1);
-      g_autoptr(PortalInterface) dfl_portal = NULL;
+      g_autoptr(PortalInterface) default_portal = NULL;
+      g_autoptr(PortalConfig) portal_config = NULL;
+      g_autoptr(GPtrArray) interfaces = NULL;
+
+      portal_config = g_new0 (PortalConfig, 1);
+      interfaces = g_ptr_array_new_full (g_strv_length (ifaces) + 1, NULL);
 
       for (size_t i = 0; ifaces[i] != NULL; i++)
         {
@@ -363,76 +363,129 @@ load_portal_configuration_for_dir (gboolean    opt_verbose,
             }
 
           if (strcmp (ifaces[i], "default") == 0)
-            dfl_portal = g_steal_pointer (&interface);
+            default_portal = g_steal_pointer (&interface);
           else
             g_ptr_array_add (interfaces, g_steal_pointer (&interface));
         }
 
-      conf->n_ifaces = interfaces->len;
-      conf->ifaces = (PortalInterface **) g_ptr_array_steal (interfaces, NULL);
-      conf->dfl_portal = g_steal_pointer (&dfl_portal);
+      portal_config->n_ifaces = interfaces->len;
+      portal_config->interfaces = (PortalInterface **) g_ptr_array_steal (interfaces, NULL);
+      portal_config->default_portal = g_steal_pointer (&default_portal);
 
-      return g_steal_pointer (&conf);
+      return g_steal_pointer (&portal_config);
     }
 
   return NULL;
 }
 
-void
-load_portal_configuration (gboolean opt_verbose)
+/*
+ * Returns: %TRUE if configuration was found in @dir
+ */
+static gboolean
+load_config_directory (const char *dir,
+                       const char **desktops,
+                       gboolean opt_verbose)
 {
   g_autoptr(PortalConfig) conf = NULL;
-  g_autofree char *user_portal_dir = NULL;
-  const char **desktops;
-  const char *portal_dir;
 
-  /* We need to override this in the tests */
-  portal_dir = g_getenv ("XDG_DESKTOP_PORTAL_DIR");
-  if (portal_dir == NULL)
-    portal_dir = SYSCONFDIR "/xdg-desktop-portal";
-
-  user_portal_dir = g_build_filename (g_get_user_config_dir (),
-                                      "xdg-desktop-portal",
-                                      NULL);
-
-  conf = load_portal_configuration_for_dir (opt_verbose, user_portal_dir, "portals.conf");
-  if (conf != NULL)
-    {
-      if (opt_verbose)
-        g_debug ("Using user portal configuration file");
-
-      config = g_steal_pointer (&conf);
-    }
-
-  desktops = get_current_lowercase_desktops ();
   for (size_t i = 0; desktops[i] != NULL; i++)
     {
       g_autofree char *portals_conf = g_strdup_printf ("%s-portals.conf", desktops[i]);
 
-      conf = load_portal_configuration_for_dir (opt_verbose, user_portal_dir, portals_conf);
+      conf = load_portal_configuration_for_dir (opt_verbose, dir, portals_conf);
+
       if (conf != NULL)
         {
           if (opt_verbose)
-            g_debug ("Using user portal configuration file '%s' for desktop '%s'",
-                     portals_conf,
-                     desktops[i]);
+            g_debug ("Using portal configuration file '%s/%s' for desktop '%s'",
+                     dir, portals_conf, desktops[i]);
 
           config = g_steal_pointer (&conf);
-          return;
-        }
-
-      conf = load_portal_configuration_for_dir (opt_verbose, portal_dir, portals_conf);
-      if (conf != NULL)
-        {
-          if (opt_verbose)
-            g_debug ("Using system portal configuration file '%s' for desktop '%s'",
-                     portals_conf,
-                     desktops[i]);
-
-          config = g_steal_pointer (&conf);
-          return;
+          return TRUE;
         }
     }
+
+  conf = load_portal_configuration_for_dir (opt_verbose, dir, "portals.conf");
+
+  if (conf != NULL)
+    {
+      if (opt_verbose)
+        g_debug ("Using portal configuration file '%s/%s' for non-specific desktop",
+                 dir, "portals.conf");
+
+      config = g_steal_pointer (&conf);
+      return TRUE;
+    }
+
+  return FALSE;
+}
+
+#define XDP_SUBDIR "xdg-desktop-portal"
+
+void
+load_portal_configuration (gboolean opt_verbose)
+{
+  g_autofree char *user_portal_dir = NULL;
+  const char * const *dirs;
+  const char * const *iter;
+  const char **desktops;
+  const char *portal_dir;
+
+  desktops = get_current_lowercase_desktops ();
+
+  /* We need to override this in the tests */
+  portal_dir = g_getenv ("XDG_DESKTOP_PORTAL_DIR");
+
+  if (portal_dir != NULL)
+    {
+      load_config_directory (portal_dir, desktops, opt_verbose);
+      /* All other config directories are ignored when this is set */
+      return;
+    }
+
+  /* $XDG_CONFIG_HOME/xdg-desktop-portal/(DESKTOP-)portals.conf */
+  user_portal_dir = g_build_filename (g_get_user_config_dir (), XDP_SUBDIR, NULL);
+
+  if (load_config_directory (user_portal_dir, desktops, opt_verbose))
+    return;
+
+  /* $XDG_CONFIG_DIRS/xdg-desktop-portal/(DESKTOP-)portals.conf */
+  dirs = g_get_system_config_dirs ();
+
+  for (iter = dirs; iter != NULL && *iter != NULL; iter++)
+    {
+      g_autofree char *dir = g_build_filename (*iter, XDP_SUBDIR, NULL);
+
+      if (load_config_directory (dir, desktops, opt_verbose))
+        return;
+    }
+
+  /* ${sysconfdir}/xdg-desktop-portal/(DESKTOP-)portals.conf */
+  if (load_config_directory (SYSCONFDIR "/" XDP_SUBDIR, desktops, opt_verbose))
+    return;
+
+  /* $XDG_DATA_HOME/xdg-desktop-portal/(DESKTOP-)portals.conf
+   * (just for consistency with other XDG specifications) */
+  g_clear_pointer (&user_portal_dir, g_free);
+  user_portal_dir = g_build_filename (g_get_user_data_dir (), XDP_SUBDIR, NULL);
+
+  if (load_config_directory (user_portal_dir, desktops, opt_verbose))
+    return;
+
+  /* $XDG_DATA_DIRS/xdg-desktop-portal/(DESKTOP-)portals.conf */
+  dirs = g_get_system_data_dirs ();
+
+  for (iter = dirs; iter != NULL && *iter != NULL; iter++)
+    {
+      g_autofree char *dir = g_build_filename (*iter, XDP_SUBDIR, NULL);
+
+      if (load_config_directory (dir, desktops, opt_verbose))
+        return;
+    }
+
+  /* ${datadir}/xdg-desktop-portal/(DESKTOP-)portals.conf */
+  if (load_config_directory (DATADIR "/" XDP_SUBDIR, desktops, opt_verbose))
+    return;
 }
 
 static gboolean
@@ -475,14 +528,14 @@ portal_impl_matches_config (const PortalImplementation *impl,
    */
   for (int i = 0; i < config->n_ifaces; i++)
     {
-      const PortalInterface *iface = config->ifaces[i];
+      const PortalInterface *iface = config->interfaces[i];
 
       if (g_strcmp0 (iface->dbus_name, interface) == 0)
         return portal_impl_name_matches (impl, iface);
     }
 
-  if (config->dfl_portal)
-    return portal_impl_name_matches (impl, config->dfl_portal);
+  if (config->default_portal)
+    return portal_impl_name_matches (impl, config->default_portal);
 
   return FALSE;
 }
@@ -494,24 +547,21 @@ find_portal_implementation (const char *interface)
   GList *l;
   int i;
 
-  desktops = get_current_lowercase_desktops ();
-
-  for (i = 0; desktops[i] != NULL; i++)
+  for (l = implementations; l != NULL; l = l->next)
     {
-     for (l = implementations; l != NULL; l = l->next)
+      PortalImplementation *impl = l->data;
+
+      if (!g_strv_contains ((const char **)impl->interfaces, interface))
+        continue;
+
+      if (portal_impl_matches_config (impl, interface))
         {
-          PortalImplementation *impl = l->data;
-
-          if (!g_strv_contains ((const char **)impl->interfaces, interface))
-            continue;
-
-          if (portal_impl_matches_config (impl, interface))
-            {
-              g_debug ("Using %s.portal for %s in %s (config)", impl->source, interface, desktops[i]);
-              return impl;
-            }
+          g_debug ("Using %s.portal for %s (config)", impl->source, interface);
+          return impl;
         }
     }
+
+  desktops = get_current_lowercase_desktops ();
 
   /* Fallback to the old UseIn key */
   for (i = 0; desktops[i] != NULL; i++)
@@ -525,6 +575,12 @@ find_portal_implementation (const char *interface)
 
           if (impl->use_in != NULL && g_strv_case_contains ((const char **)impl->use_in, desktops[i]))
             {
+              g_warning ("Choosing %s.portal for %s via the deprecated UseIn key",
+                         impl->source, interface);
+              g_warning_once ("The preferred method to match portal implementations "
+                              "to desktop environments is to use the portals.conf(5) "
+                              "configuration file");
+
               g_debug ("Using %s.portal for %s in %s (fallback)", impl->source, interface, desktops[i]);
               return impl;
             }
@@ -560,9 +616,12 @@ find_all_portal_implementations (const char *interface)
     {
       PortalImplementation *impl = l->data;
 
-      if (g_strv_contains ((const char **)impl->interfaces, interface))
+      if (!g_strv_contains ((const char **)impl->interfaces, interface))
+        continue;
+
+      if (portal_impl_matches_config (impl, interface))
         {
-          g_debug ("Using %s.portal for %s", impl->source, interface);
+          g_debug ("Using %s.portal for %s (config)", impl->source, interface);
           g_ptr_array_add (impls, impl);
         }
     }

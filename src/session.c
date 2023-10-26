@@ -24,15 +24,6 @@
 
 enum
 {
-  INTERNAL_CLOSED,
-
-  N_SIGNALS
-};
-
-static guint signals[N_SIGNALS];
-
-enum
-{
   PROP_0,
 
   PROP_SENDER,
@@ -183,15 +174,18 @@ session_close (Session *session,
 
   SESSION_GET_CLASS (session)->close (session);
 
-  g_signal_emit (session, signals[INTERNAL_CLOSED], 0);
-
   if (notify_closed)
     {
       GVariantBuilder details_builder;
 
       g_variant_builder_init (&details_builder, G_VARIANT_TYPE_VARDICT);
-      g_signal_emit_by_name (session, "closed",
-                             g_variant_builder_end (&details_builder));
+      g_dbus_connection_emit_signal (session->connection,
+                                     session->sender,
+                                     session->id,
+                                     "org.freedesktop.portal.Session",
+                                     "Closed",
+                                     g_variant_new ("(@a{sv})", g_variant_builder_end (&details_builder)),
+                                     NULL);
     }
 
   if (session->exported)
@@ -539,11 +533,4 @@ session_class_init (SessionClass *klass)
                          G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, PROP_LAST, obj_props);
-
-  signals[INTERNAL_CLOSED] = g_signal_new ("internal-closed",
-                                           G_TYPE_FROM_CLASS (klass),
-                                           G_SIGNAL_RUN_LAST,
-                                           0,
-                                           NULL, NULL, NULL,
-                                           G_TYPE_NONE, 0);
 }

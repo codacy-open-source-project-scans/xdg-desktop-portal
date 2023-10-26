@@ -27,28 +27,6 @@ static GHashTable *transient_permissions;
 
 #define RESTORE_DATA_TYPE "(suv)"
 
-static void
-internal_closed_cb (Session *session)
-{
-  g_autoptr(GMutexLocker) locker = NULL;
-  GHashTableIter iter;
-  const char *key;
-
-  locker = g_mutex_locker_new (&transient_permissions_lock);
-
-  if (!transient_permissions)
-    return;
-
-  g_hash_table_iter_init (&iter, transient_permissions);
-  while (g_hash_table_iter_next (&iter, (gpointer *) &key, NULL))
-    {
-      g_auto(GStrv) split = g_strsplit (key, "/", 2);
-
-      if (split && split[0] && g_strcmp0 (split[0], session->sender) == 0)
-        g_hash_table_iter_remove (&iter);
-    }
-}
-
 void
 xdp_session_persistence_set_transient_permissions (Session *session,
                                                    const char *restore_token,
@@ -66,13 +44,6 @@ xdp_session_persistence_set_transient_permissions (Session *session,
   g_hash_table_insert (transient_permissions,
                        g_strdup_printf ("%s/%s", session->sender, restore_token),
                        g_variant_ref (restore_data));
-
-  if (!session->persistence.has_transient_permissions)
-    {
-      g_signal_connect (session, "internal-closed",
-                        G_CALLBACK (internal_closed_cb), NULL);
-      session->persistence.has_transient_permissions = TRUE;
-    }
 }
 
 void
@@ -87,6 +58,29 @@ xdp_session_persistence_delete_transient_permissions (Session *session,
 
   id = g_strdup_printf ("%s/%s", session->sender, restore_token);
   g_hash_table_remove (transient_permissions, id);
+}
+
+void
+xdp_session_persistence_delete_transient_permissions_for_sender (const char *sender_name)
+{
+
+  g_autoptr(GMutexLocker) locker = NULL;
+  GHashTableIter iter;
+  const char *key;
+
+  locker = g_mutex_locker_new (&transient_permissions_lock);
+
+  if (!transient_permissions)
+    return;
+
+  g_hash_table_iter_init (&iter, transient_permissions);
+  while (g_hash_table_iter_next (&iter, (gpointer *) &key, NULL))
+    {
+      g_auto(GStrv) split = g_strsplit (key, "/", 2);
+
+      if (split && split[0] && g_strcmp0 (split[0], sender_name) == 0)
+        g_hash_table_iter_remove (&iter);
+    }
 }
 
 GVariant *

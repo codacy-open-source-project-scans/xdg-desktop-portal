@@ -17,3 +17,5 @@
  - bump version in meson.build
  - git commit -m "Post-release version bump"
  - git push origin main
+ - Update SECURITY.md if this is a new stable release
+ - Update .github/ISSUE_TEMPLATE/bug-report.yml if this is a new stable release

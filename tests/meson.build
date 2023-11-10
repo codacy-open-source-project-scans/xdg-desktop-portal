@@ -175,6 +175,7 @@ portal_tests = [
   'print',
   'savefile',
   'screenshot',
+  'settings',
   'trash',
   'wallpaper',
 ]
@@ -188,7 +189,6 @@ foreach p : portal_tests
       args: ['--verbose', '--keep-going', '--tap', '-p', '/portal/@0@'.format(p)],
       depends: [test_backends, test_portals],
       env: test_env,
-      is_parallel: false,
       protocol: test_protocol,
       suite: 'portals',
     )
@@ -211,7 +211,6 @@ foreach p : portal_limited
       args: ['--verbose', '--keep-going', '--tap', '-p', '/limited/@0@'.format(p)],
       depends: [test_backends, limited_portals],
       env: limited_env,
-      is_parallel: false,
       protocol: test_protocol,
       suite: 'portals',
     )
@@ -265,6 +264,23 @@ test(
   protocol: test_protocol,
 )
 
+test_method_info = executable(
+  'test-xdp-method-info',
+  'test-xdp-method-info.c',
+  xdp_method_info_sources,
+  dependencies: [common_deps],
+  include_directories: [common_includes, xdp_utils_includes],
+  install: enable_installed_tests,
+  install_dir: installed_tests_dir,
+)
+test(
+  'test-xdp-method-info',
+  test_method_info,
+  env: env_tests,
+  is_parallel: true,
+  protocol: test_protocol,
+)
+
 pytest = find_program('pytest-3', 'pytest', required: get_option('pytest'))
 pymod = import('python')
 python = pymod.find_installation(
@@ -315,6 +331,13 @@ if enable_pytest
       )
     endif
   endforeach
+
+  configure_file(
+    input: '.pytest.ini',
+    output: '@PLAINNAME@',
+    copy: true,
+    install: false
+  )
 endif
 
 if enable_installed_tests
@@ -371,3 +394,5 @@ if enable_installed_tests
       )
   endforeach
 endif
+
+meson.add_devenv(test_env)

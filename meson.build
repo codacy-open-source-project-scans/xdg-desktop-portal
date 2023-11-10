@@ -1,8 +1,8 @@
 project(
   'xdg-desktop-portal',
   'c',
-  version: '1.18.1',
-  meson_version: '>= 0.58',
+  version: '1.19.0',
+  meson_version: '>= 0.60',
   license: 'LGPL-2.0-or-later',
   default_options: ['warning_level=2'])
 

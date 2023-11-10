@@ -31,7 +31,7 @@
       via the document portal, and the returned URI will point
       into the document portal fuse filesystem in /run/user/$UID/doc/.
 
-      This documentation describes version 3 of this interface.
+      This documentation describes version 4 of this interface.
   -->
   <interface name="org.freedesktop.portal.FileChooser">
     <!--
@@ -103,13 +103,18 @@
         </varlistentry>
         <varlistentry>
           <term>current_filter (sa(us))</term>
-          <listitem><para>
-            Request that this filter be set by default at dialog creation. If
-            the filters list is nonempty, it should match a filter in the
-            list to set the default filter from the list. Alternatively, it
-            may be specified when the list is empty to apply the filter
-            unconditionally.
-          </para></listitem>
+          <listitem>
+            <para>
+              Request that this filter be set by default at dialog creation. If
+              the filters list is nonempty, it should match a filter in the
+              list to set the default filter from the list. Alternatively, it
+              may be specified when the list is empty to apply the filter
+              unconditionally.
+            </para>
+            <para>
+              This option was added in version 4 of this interface.
+            </para>
+          </listitem>
         </varlistentry>
         <varlistentry>
           <term>choices a(ssa(ss)s)</term>
@@ -150,6 +155,9 @@
             <para>
               The portal implementation is free to ignore this option. 
             </para>
+            <para>
+              This option was added in version 4 of this interface.
+            </para>
           </listitem>
         </varlistentry>
       </variablelist>
@@ -159,7 +167,8 @@
         <varlistentry>
           <term>uris as</term>
           <listitem><para>
-            An array of strings containing the uris of the selected files.
+            An array of strings containing the uris of the selected files. All
+            URIs have the "file://" scheme.
           </para></listitem>
         </varlistentry>
         <varlistentry>
@@ -181,6 +190,9 @@
             <para>
               The filter that was selected. This may match a filter in the
               filter list or another filter that was applied unconditionally.
+            </para>
+            <para>
+              This option was added in version 4 of this interface.
             </para>
           </listitem>
         </varlistentry>
@@ -232,10 +244,15 @@
         </varlistentry>
         <varlistentry>
           <term>current_filter (sa(us))</term>
-          <listitem><para>
-            Request that this filter be set by default at dialog creation.
-            See org.freedesktop.portal.FileChooser.OpenFile() for details.
-          </para></listitem>
+          <listitem>
+            <para>
+              Request that this filter be set by default at dialog creation.
+              See org.freedesktop.portal.FileChooser.OpenFile() for details.
+            </para>
+            <para>
+              This option was added in version 4 of this interface.
+            </para>
+          </listitem>
         </varlistentry>
         <varlistentry>
           <term>choices a(ssa(ss)s)</term>
@@ -281,7 +298,8 @@
         <varlistentry>
           <term>uris as</term>
           <listitem><para>
-            An array of strings containing the uri of the selected file.
+            An array of strings containing the uri of the selected file. All
+            URIs have the "file://" scheme.
           </para></listitem>
         </varlistentry>
         <varlistentry>
@@ -297,6 +315,9 @@
             <para>
               The filter that was selected.
               See org.freedesktop.portal.FileChooser.OpenFile() for details.
+            </para>
+            <para>
+              This option was added in version 4 of this interface.
             </para>
           </listitem>
         </varlistentry>
@@ -314,6 +335,9 @@
             </para>
             <para>
               The portal implementation is free to ignore this option. 
+            </para>
+            <para>
+              This option was added in version 4 of this interface.
             </para>
           </listitem>
         </varlistentry>
@@ -403,12 +427,17 @@
       <variablelist>
         <varlistentry>
           <term>uris as</term>
-          <listitem><para>
-            An array of strings containing the uri corresponding to
-            each file given by @options, in the same order. Note that
-            the file names may have changed, for example if a file
-            with the same name in the selected folder already exists.
-          </para></listitem>
+          <listitem>
+            <para>
+              An array of strings containing the uri corresponding to
+              each file given by @options, in the same order. Note that
+              the file names may have changed, for example if a file
+              with the same name in the selected folder already exists.
+            </para>
+            <para>
+               All URIs have the "file://" scheme.
+            </para>
+          </listitem>
         </varlistentry>
         <varlistentry>
           <term>choices a(ss)</term>

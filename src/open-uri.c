@@ -741,7 +741,7 @@ handle_open_in_thread_func (GTask *task,
                                                   FILE_MANAGER_DBUS_PATH,
                                                   FILE_MANAGER_DBUS_IFACE,
                                                   FILE_MANAGER_SHOW_ITEMS,
-                                                  g_variant_new ("(ass)", uris_builder, activation_token),
+                                                  g_variant_new ("(ass)", uris_builder, activation_token ? activation_token : ""),
                                                   NULL,   /* ignore returned type */
                                                   G_DBUS_CALL_FLAGS_NONE,
                                                   -1,
@@ -894,7 +894,7 @@ handle_open_in_thread_func (GTask *task,
   if (uri)
     g_variant_builder_add (&opts_builder, "{sv}", "uri", g_variant_new_string (uri));
   if (activation_token)
-    g_variant_builder_add (&opts_builder, "{sv}", "activation_token", g_variant_new_string (uri));
+    g_variant_builder_add (&opts_builder, "{sv}", "activation_token", g_variant_new_string (activation_token));
 
   impl_request =
     xdp_dbus_impl_request_proxy_new_sync (g_dbus_proxy_get_connection (G_DBUS_PROXY (impl)),

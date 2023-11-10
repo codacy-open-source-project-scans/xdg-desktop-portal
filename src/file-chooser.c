@@ -117,6 +117,14 @@ send_response_in_thread_func (GTask        *task,
           g_autofree char *ruri = NULL;
           g_autoptr(GError) error = NULL;
 
+          g_assert (uris[i] != NULL);
+
+          if (!g_str_has_prefix (uris[i], "file://"))
+            {
+              g_warning ("Only URIs with the \"file://\" scheme are allowed");
+              continue;
+            }
+
           if (xdp_app_info_is_host (request->app_info))
             ruri = g_strdup (uris[i]);
           else
@@ -142,6 +150,8 @@ out:
                                       g_variant_builder_end (&results));
       request_unexport (request);
     }
+
+  g_task_return_boolean (task, TRUE);
 }
 
 /* Calling Lookup on a nonexisting path does not work, so we
@@ -873,7 +883,7 @@ file_chooser_iface_init (XdpDbusFileChooserIface *iface)
 static void
 file_chooser_init (FileChooser *fc)
 {
-  xdp_dbus_file_chooser_set_version (XDP_DBUS_FILE_CHOOSER (fc), 3);
+  xdp_dbus_file_chooser_set_version (XDP_DBUS_FILE_CHOOSER (fc), 4);
 }
 
 static void

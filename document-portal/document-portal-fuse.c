@@ -1,3 +1,25 @@
+/*
+ * Copyright © 2018 Red Hat, Inc
+ * Copyright © 2023 GNOME Foundation Inc.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Authors:
+ *       Alexander Larsson <alexl@redhat.com>
+ *       Hubert Figuière <hub@figuiere.net>
+ */
+
 #include "config.h"
 
 #define FUSE_USE_VERSION 35
@@ -153,8 +175,6 @@ struct _XdpDomain {
   guint64 doc_dir_inode;
   guint32 doc_flags;
 
-  int doc_queued_invalidate; /* Access atomically, 1 if queued invalidate */
-
   /* Below is mutable, protected by mutex */
   GMutex  tempfile_mutex;
   GHashTable *tempfiles; /* Name -> physical */
@@ -223,6 +243,14 @@ typedef struct {
 XdpInode *root_inode;
 XdpInode *by_app_inode;
 
+typedef struct {
+  ino_t parent_ino;
+  char name[0];
+} XdpInvalidateData;
+
+static GList *invalidate_list;
+G_LOCK_DEFINE (invalidate_list);
+
 static XdpInode *xdp_inode_ref (XdpInode *inode);
 static void xdp_inode_unref (XdpInode *inode);
 
@@ -237,6 +265,8 @@ static int ensure_docdir_inode (XdpInode *parent,
                                 int o_path_fd_in, /* Takes ownership */
                                 struct fuse_entry_param *e,
                                 XdpInode **inode_out);
+
+static void queue_invalidate_dentry (XdpInode *parent, const char *name);
 
 static gboolean
 app_can_write_doc (PermissionDbEntry *entry, const char *app_id)
@@ -1061,6 +1091,8 @@ get_tempfile_for (XdpInode *parent,
   /* This is atomic, because we're called with the lock held */
   g_hash_table_replace (domain->tempfiles, tempfile->name, xdp_tempfile_ref (tempfile));
 
+  queue_invalidate_dentry (parent, tempfile->name);
+
   if (tempfile_out)
     *tempfile_out = g_steal_pointer (&tempfile);
   return 0;
@@ -1107,6 +1139,8 @@ create_tempfile (XdpInode *parent,
 
   /* This is atomic, because we're called with the lock held */
   g_hash_table_replace (domain->tempfiles, tempfile->name, xdp_tempfile_ref (tempfile));
+
+  queue_invalidate_dentry (parent, tempfile->name);
 
   if (tempfile_out)
     *tempfile_out = g_steal_pointer (&tempfile);
@@ -1278,6 +1312,13 @@ xdp_reply_err (const char *op, fuse_req_t req, int err)
         g_debug ("%s -> error %d", op, err);
     }
   fuse_reply_err (req, err);
+}
+
+static inline void
+xdp_reply_ok (const char *op,
+              fuse_req_t  req)
+{
+  xdp_reply_err (op, req, 0);
 }
 
 typedef enum {
@@ -1707,37 +1748,53 @@ ensure_doc_inode (XdpInode *parent,
 }
 
 static gboolean
-invalidate_doc_domain (gpointer user_data)
+invalidate_dentry_cb (gpointer user_data)
 {
-  g_autoptr(XdpDomain) doc_domain = user_data;
-  ino_t parent_ino;
-
-  g_atomic_int_set (&doc_domain->doc_queued_invalidate, 0);
-
-  parent_ino = xdp_inode_to_ino (doc_domain->parent_inode);
+  GList *to_invalidate = NULL;
+  {
+    XDP_AUTOLOCK (invalidate_list);
+    to_invalidate = g_steal_pointer (&invalidate_list);
+  }
+  to_invalidate = g_list_reverse (to_invalidate);
 
   XDP_AUTOLOCK (session);
-  if (session && g_atomic_int_get (&doc_domain->parent_inode->kernel_ref_count) > 0)
-    fuse_lowlevel_notify_inval_entry (session, parent_ino, doc_domain->doc_id,
-                                      strlen (doc_domain->doc_id));
+  for (GList *l = to_invalidate; l != NULL; l = l->next)
+    {
+      XdpInvalidateData *data = l->data;
+      if (session)
+        fuse_lowlevel_notify_inval_entry (session, data->parent_ino, data->name,
+                                          strlen (data->name));
+      g_free (data);
+    }
+
+  g_list_free (to_invalidate);
 
   return FALSE;
 }
 
-/* Queue an inval_entry call on this domain, thereby freeing all unused inodes
- * in the dcache which will free up a bunch of O_PATH fds in the fuse implementation
+/* Queue an inval_dentry, thereby freeing unused inodes in the dcache
+ * which will free up a bunch of O_PATH fds in the fuse implementation.
  */
 static void
-doc_domain_queue_entry_invalidate (XdpDomain *doc_domain)
+queue_invalidate_dentry (XdpInode *parent, const char *name)
 {
-  int old = g_atomic_int_get (&doc_domain->doc_queued_invalidate);
-  if (old != 0)
-    return;
+  XDP_AUTOLOCK (invalidate_list);
 
-  if (!g_atomic_int_compare_and_exchange (&doc_domain->doc_queued_invalidate, old, 1))
-    return; // Someone else set it to 1, return
+  for (GList *l = invalidate_list; l != NULL; l = l->next)
+    {
+      XdpInvalidateData *data = l->data;
+      if (data->parent_ino == parent->ino && strcmp (name, data->name) == 0)
+        return;
+    }
 
-  g_timeout_add (1000, invalidate_doc_domain, xdp_domain_ref (doc_domain));
+  XdpInvalidateData *data = g_malloc0 (sizeof (XdpInvalidateData) + strlen (name) + 1);
+  data->parent_ino = parent->ino;
+  strcpy (data->name, name);
+
+  if (invalidate_list == NULL)
+    g_timeout_add (10, invalidate_dentry_cb, NULL);
+
+  invalidate_list = g_list_append (invalidate_list, data);
 }
 
 static void
@@ -1800,7 +1857,7 @@ xdp_fuse_lookup (fuse_req_t req,
       if (res != 0)
         return xdp_reply_err (op, req, -res);
 
-      doc_domain_queue_entry_invalidate (parent_domain);
+      queue_invalidate_dentry (parent, name);
     }
 
   g_debug ("LOOKUP %lx:%s => %lx", parent_ino, name, e.ino);
@@ -1849,6 +1906,29 @@ xdp_fuse_open (fuse_req_t req,
     return;
 
   path = fd_to_path (inode->physical->fd);
+
+  /*
+   * `path` is a path to the fd entry in `/proc`, which is a symlink
+   * to the actual file. Opening it directly with `O_NOFOLLOW` will
+   * fail. So we should resolve it first then we can honour the no
+   * follow flag.
+   */
+  if (open_flags & O_NOFOLLOW)
+    {
+      char resolved_path[PATH_MAX] = { 0, };
+      ssize_t res;
+
+      res = readlink (path, resolved_path, sizeof (resolved_path));
+
+      if (res == sizeof (resolved_path))
+        return xdp_reply_err (op, req, ENAMETOOLONG);
+      if (res < 0)
+        return xdp_reply_err (op, req, errno);
+
+      g_clear_pointer (&path, g_free);
+      path = g_strdup (resolved_path);
+    }
+
   fd = open (path, open_flags, 0);
   if (fd == -1)
     return xdp_reply_err (op, req, errno);
@@ -1910,6 +1990,8 @@ xdp_fuse_create (fuse_req_t             req,
       xdp_file_free (file);
       abort_reply_entry (&e);
     }
+
+  queue_invalidate_dentry (parent, filename);
 }
 
 static void
@@ -1996,7 +2078,7 @@ xdp_fuse_fsync (fuse_req_t             req,
   else
     res = fsync (file->fd);
   if (res == 0)
-    xdp_reply_err (op, req, 0);
+    xdp_reply_ok (op, req);
   else
     xdp_reply_err (op, req, errno);
 }
@@ -2022,7 +2104,7 @@ xdp_fuse_fallocate (fuse_req_t req,
 #endif
 
   if (res == 0)
-    xdp_reply_err (op, req, 0);
+    xdp_reply_ok (op, req);
   else
     xdp_reply_err (op, req, errno);
 }
@@ -2035,7 +2117,7 @@ xdp_fuse_flush (fuse_req_t req,
   const char *op = "FLUSH";
 
   g_debug ("FLUSH %lx", ino);
-  xdp_reply_err (op, req, 0);
+  xdp_reply_ok (op, req);
 }
 
 static void
@@ -2050,7 +2132,7 @@ xdp_fuse_release (fuse_req_t             req,
 
   xdp_file_free (file);
 
-  xdp_reply_err (op, req, 0);
+  xdp_reply_ok (op, req);
 }
 
 static void
@@ -2389,7 +2471,7 @@ xdp_fuse_releasedir (fuse_req_t             req,
 
   xdp_dir_free (d);
 
-  xdp_reply_err (op, req, 0);
+  xdp_reply_ok (op, req);
 }
 
 static void
@@ -2416,7 +2498,7 @@ xdp_fuse_fsyncdir (fuse_req_t             req,
     res = 0;
 
   if (res == 0)
-    xdp_reply_err (op, req, 0);
+    xdp_reply_ok (op, req);
   else
     xdp_reply_err (op, req, errno);
 }
@@ -2511,7 +2593,7 @@ xdp_fuse_unlink (fuse_req_t  req,
         }
     }
 
-  xdp_reply_err (op, req, 0);
+  xdp_reply_ok (op, req);
 }
 
 static int
@@ -2581,7 +2663,7 @@ xdp_fuse_rename (fuse_req_t  req,
       if (res != 0)
         return xdp_reply_err (op, req, errno);
 
-      xdp_reply_err (op, req, 0);
+      xdp_reply_ok (op, req);
     }
   else
     {
@@ -2591,7 +2673,7 @@ xdp_fuse_rename (fuse_req_t  req,
 
       /* Early exit for same file */
       if (strcmp (name, newname) == 0)
-        return xdp_reply_err (op, req, 0);
+        return xdp_reply_ok (op, req);
 
       dirfd = xdp_nonphysical_document_inode_opendir (parent);
       if (dirfd < 0)
@@ -2628,7 +2710,7 @@ xdp_fuse_rename (fuse_req_t  req,
           if (res != 0)
             return xdp_reply_err (op, req, -res);
 
-          xdp_reply_err (op, req, 0);
+          xdp_reply_ok (op, req);
         }
       else if (strcmp (newname, domain->doc_file) == 0)
         {
@@ -2665,7 +2747,7 @@ xdp_fuse_rename (fuse_req_t  req,
           if (res != 0)
             return xdp_reply_err (op, req, errsv);
 
-          xdp_reply_err (op, req, 0);
+          xdp_reply_ok (op, req);
         }
       else
         {
@@ -2693,7 +2775,7 @@ xdp_fuse_rename (fuse_req_t  req,
           if (!found_tempfile)
             return xdp_reply_err (op, req, ENOENT);
 
-          xdp_reply_err (op, req, 0);
+          xdp_reply_ok (op, req);
         }
     }
 }
@@ -2713,11 +2795,9 @@ xdp_fuse_access (fuse_req_t req,
   if (inode->domain->type != XDP_DOMAIN_DOCUMENT)
     {
       if (mask & W_OK)
-        xdp_reply_err (op, req, EPERM);
+        return xdp_reply_err (op, req, EPERM);
       else
-        xdp_reply_err (op, req, 0);
-
-      return;
+        return xdp_reply_ok (op, req);
     }
 
   if ((mask & W_OK) != 0 &&
@@ -2745,7 +2825,7 @@ xdp_fuse_access (fuse_req_t req,
   if (res == -1)
     xdp_reply_err (op, req, errno);
   else
-    xdp_reply_err (op, req, 0);
+    xdp_reply_ok (op, req);
 }
 
 static void
@@ -2773,9 +2853,9 @@ xdp_fuse_rmdir (fuse_req_t req,
 
   res = unlinkat (dirfd, filename, AT_REMOVEDIR);
   if (res != 0)
-    xdp_reply_err (op, req, errno);
+    return xdp_reply_err (op, req, errno);
 
-  xdp_reply_err (op, req, 0);
+  xdp_reply_ok (op, req);
 }
 
 static void
@@ -2946,7 +3026,7 @@ xdp_fuse_setxattr (fuse_req_t req,
   if (res < 0)
     return xdp_reply_err (op, req, errno);
 
-  xdp_reply_err (op, req, 0);
+  xdp_reply_ok (op, req);
 }
 
 static void
@@ -3063,7 +3143,7 @@ xdp_fuse_removexattr (fuse_req_t req,
   if (res < 0)
     xdp_reply_err (op, req, errno);
   else
-    xdp_reply_err (op, req, 0);
+    xdp_reply_ok (op, req);
 }
 
 static void
@@ -3073,10 +3153,16 @@ xdp_fuse_getlk (fuse_req_t req,
                 struct flock *lock)
 {
   const char *op = "GETLK";
+  XdpFile *file = (XdpFile *)fi->fh;
+  int res;
 
   g_debug ("GETLK %lx", ino);
 
-  xdp_reply_err (op, req, ENOSYS);
+  res = fcntl (file->fd, F_GETLK, lock);
+  if (res < 0)
+    return xdp_reply_err (op, req, errno);
+
+  return xdp_reply_ok (op, req);
 }
 
 static void
@@ -3087,10 +3173,16 @@ xdp_fuse_setlk (fuse_req_t req,
                 int sleep)
 {
   const char *op = "SETLK";
+  XdpFile *file = (XdpFile *)fi->fh;
+  int res;
 
   g_debug ("SETLK %lx", ino);
 
-  xdp_reply_err (op, req, ENOSYS);
+  res = fcntl (file->fd, F_SETLK, lock);
+  if (res < 0)
+    return xdp_reply_err (op, req, errno);
+
+  return xdp_reply_ok (op, req);
 }
 
 static void

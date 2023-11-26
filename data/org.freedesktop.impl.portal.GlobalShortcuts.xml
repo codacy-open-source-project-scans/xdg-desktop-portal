@@ -31,24 +31,20 @@
   <interface name="org.freedesktop.impl.portal.GlobalShortcuts">
     <!--
         CreateSession:
-        @handle: Object path for the #org.freedesktop.impl.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
         @session_handle: Object path for the #org.freedesktop.impl.portal.Session object representing the session being created
         @app_id: App id of the application
-        @options: Vardict with optional further information. See @org.freedesktop.portal.GlobalShortcuts.CreateSession
+        @options: Vardict with optional further information. See org.freedesktop.portal.GlobalShortcuts.CreateSession()
         @response: Numeric Request response
         @results: Vardict with the results of the call
 
         Create a global shortcuts session.
 
         The following results get returned in the @results vardict:
-        <variablelist>
-          <varlistentry>
-            <term>session_id s</term>
-            <listitem><para>
-              The session id. A string representing the created global shortcuts session.
-            </para></listitem>
-          </varlistentry>
-        </variablelist>
+
+        * ``session_id`` (``s``)
+
+          The session id. A string representing the created global shortcuts session.
     -->
     <method name="CreateSession">
       <arg type="o" name="handle" direction="in"/>
@@ -63,10 +59,10 @@
 
     <!--
         BindShortcuts:
-        @handle: Object path for the #org.freedesktop.impl.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
         @session_handle: Object path for the #org.freedesktop.impl.portal.Session object representing the session
         @shortcuts: The list of shortcuts to bind. See @org.freedesktop.portal.GlobalShortcuts.BindShortcuts
-        @parent_window: Identifier for the application window, see <link linkend="parent_window">Common Conventions</link>
+        @parent_window: Identifier for the application window, see :ref:`Common Conventions <window-identifiers>`
         @shortcuts: The identifier of the shortcuts we intend to register, empty for all shortcuts
         @results: Vardict with the results of the call
 
@@ -92,25 +88,21 @@
 
     <!--
         ListShortcuts:
-        @handle: Object path for the #org.freedesktop.impl.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
         @session_handle: Object path for the #org.freedesktop.impl.portal.Session object representing the session
         @results: Vardict with the results of the call
 
         List shortcuts registered in the global shortcuts session.
 
         The following results get returned in the @results vardict:
-        <variablelist>
-          <varlistentry>
-            <term>shortcuts a(sa{sv})</term>
-            <listitem><para>
-              A list of shortcuts.
 
-              See the #org.freedesktop.portal.Request::Response signal of the
-              org.freedesktop.portal.GlobalShortcuts.BindShortcuts() method for
-              the list of supported properties of shortcuts.
-            </para></listitem>
-          </varlistentry>
-      </variablelist>
+        * ``shortcuts`` (``a(sa{sv})``)
+
+          A list of shortcuts.
+
+          See the #org.freedesktop.portal.Request::Response signal of the
+          org.freedesktop.portal.GlobalShortcuts.BindShortcuts() method for
+          the list of supported properties of shortcuts.
     -->
     <method name="ListShortcuts">
       <arg type="o" name="handle" direction="in"/>

@@ -29,32 +29,29 @@
   <interface name="org.freedesktop.impl.portal.Inhibit">
     <!--
         Inhibit:
-        @handle: Object path for the #org.freedesktop.impl.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
         @app_id: Application id
         @window: Identifier for the window
         @flags: Flags identifying what is inhibited
         @options: Vardict with optional further information
 
         Inhibits session status changes. As a side-effect of this call,
-        a #org.freedesktop.impl.portal.Request object is exported on the
+        a :ref:`org.freedesktop.impl.portal.Request` object is exported on the
         object path @handle. To end the inhibition, call
         org.freedesktop.impl.portal.Request.Close() on that object.
 
         The flags determine what changes are inhibited:
-        <simplelist>
-          <member>1: Logout</member>
-          <member>2: User Switch</member>
-          <member>4: Suspend</member>
-          <member>8: Idle</member>
-        </simplelist>
+
+        - ``1``: Logout
+        - ``2``: User Switch
+        - ``4``: Suspend
+        - ``8``: Idle
 
         Supported keys in the @options vardict include:
-        <variablelist>
-          <varlistentry>
-            <term>reason s</term>
-            <listitem><para>User-visible reason for the inhibition.</para></listitem>
-          </varlistentry>
-        </variablelist>
+
+        * ``reason`` (``s``)
+
+          User-visible reason for the inhibition.
     -->
     <method name="Inhibit">
       <arg type="o" name="handle" direction="in"/>
@@ -67,7 +64,7 @@
 
     <!--
         CreateMonitor:
-        @handle: Object path for the #org.freedesktop.impl.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
         @session_handle: Object path for the created #org.freedesktop.impl.portal.Session object
         @app_id: App id of the application
         @window: the parent window
@@ -87,7 +84,7 @@
 
     <!--
         StateChanged:
-        @session_handle: Object path for the #org.freedesktop.portal.Session object
+        @session_handle: Object path for the :ref:`org.freedesktop.portal.Session` object
         @state: Vardict with information about the session state
 
         The StateChanged signal is sent to active monitoring sessions when
@@ -99,26 +96,18 @@
         of receiving the StateChanged signal.
 
         The following information may get returned in the @state vardict:
-        <variablelist>
-           <varlistentry>
-            <term>screensaver-active b</term>
-            <listitem><para>
-              Whether the screensaver is active.
-            </para></listitem>
-          </varlistentry>
-           <varlistentry>
-            <term>session-state u</term>
-            <listitem><para>
-              The state of the session.
-            </para>
-            <simplelist>
-              <member>1: Running</member>
-              <member>2: Query End</member>
-              <member>3: Ending</member>
-            </simplelist>
-            </listitem>
-          </varlistentry>
-        </variablelist>
+
+        * ``screensaver-active`` (``b``)
+
+          Whether the screensaver is active.
+
+        * ``session-state`` (``u``)
+
+          The state of the session.
+
+          - ``1``: Running
+          - ``2``: Query End
+          - ``3``: Ending
     -->
     <signal name="StateChanged">
       <arg type="o" name="session_handle" direction="out"/>

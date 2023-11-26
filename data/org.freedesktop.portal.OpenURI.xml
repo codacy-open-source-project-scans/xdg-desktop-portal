@@ -32,55 +32,44 @@
   <interface name="org.freedesktop.portal.OpenURI">
     <!--
         OpenURI:
-        @parent_window: Identifier for the application window, see <link linkend="parent_window">Common Conventions</link>
+        @parent_window: Identifier for the application window, see :ref:`Common Conventions <window-identifiers>`
         @uri: The uri to open
         @options: Vardict with optional further information
-        @handle: Object path for the #org.freedesktop.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
 
-        Asks to open a uri.
+        Asks to open a URI.
 
-        Note that file:// uris are explicitly not supported by this method.
+        Note that ``file://`` URIs are explicitly not supported by this method.
         To request opening local files, use org.freedesktop.portal.OpenURI.OpenFile().
 
         Supported keys in the @options vardict include:
-        <variablelist>
-          <varlistentry>
-            <term>handle_token s</term>
-            <listitem><para>
-              A string that will be used as the last element of the @handle. Must be a valid
-              object path element. See the #org.freedesktop.portal.Request documentation for
-              more information about the @handle.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>writable b</term>
-            <listitem><para>
-              Whether to allow the chosen application to write to the file.
-            </para><para>
-              This key only takes effect the uri points to a local file that
-              is exported in the document portal, and the chosen application
-              is sandboxed itself.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>ask b</term>
-            <listitem><para>
-              Whether to ask the user to choose an app. If this is not passed, or false,
-              the portal may use a default or pick the last choice.
-            </para><para>
-              The ask option was introduced in version 3 of the interface.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>activation_token s</term>
-            <listitem><para>
-              A token that can be used to activate the chosen application.
-            </para><para>
-              The activation_token option was introduced in version 4 of the interface.
-            </para></listitem>
-          </varlistentry>
-        </variablelist>
 
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``writable`` (``b``)
+
+          Whether to allow the chosen application to write to the file.
+
+          This key only takes effect the uri points to a local file that
+          is exported in the document portal, and the chosen application
+          is sandboxed itself.
+
+        * ``ask`` (``b``)
+
+          Whether to ask the user to choose an app. If this is not passed, or false,
+          the portal may use a default or pick the last choice.
+
+          The ask option was introduced in version 3 of the interface.
+
+        * ``activation_token`` (``s``)
+
+          A token that can be used to activate the chosen application.
+
+          The activation_token option was introduced in version 4 of the interface.
     -->
     <method name="OpenURI">
       <arg type="s" name="parent_window" direction="in"/>
@@ -91,51 +80,41 @@
 
     <!--
         OpenFile:
-        @parent_window: Identifier for the application window, see <link linkend="parent_window">Common Conventions</link>
+        @parent_window: Identifier for the application window, see :ref:`Common Conventions <window-identifiers>`
         @fd: File descriptor for the file to open
         @options: Vardict with optional further information
-        @handle: Object path for the #org.freedesktop.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
 
         Asks to open a local file.
 
         Supported keys in the @options vardict include:
-        <variablelist>
-          <varlistentry>
-            <term>handle_token s</term>
-            <listitem><para>
-              A string that will be used as the last element of the @handle. Must be a valid
-              object path element. See the #org.freedesktop.portal.Request documentation for
-              more information about the @handle.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>writable b</term>
-            <listitem><para>
-              Whether to allow the chosen application to write to the file.
-            </para><para>
-              This key only takes effect the uri points to a local file that
-              is exported in the document portal, and the chosen application
-              is sandboxed itself.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>ask b</term>
-            <listitem><para>
-              Whether to ask the user to choose an app. If this is not passed, or false,
-              the portal may use a default or pick the last choice.
-            </para><para>
-              The ask option was introduced in version 3 of the interface.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>activation_token s</term>
-            <listitem><para>
-              A token that can be used to activate the chosen application.
-            </para><para>
-              The activation_token option was introduced in version 4 of the interface.
-            </para></listitem>
-          </varlistentry>
-        </variablelist>
+
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``writable`` (``b``)
+
+          Whether to allow the chosen application to write to the file.
+
+          This key only takes effect the uri points to a local file that is
+          exported in the document portal, and the chosen application is
+          sandboxed itself.
+
+        * ``ask`` (``b``)
+
+          Whether to ask the user to choose an app. If this is not passed, or false,
+          the portal may use a default or pick the last choice.
+
+          The ask option was introduced in version 3 of the interface.
+
+        * ``activation_token`` (``s``)
+
+          A token that can be used to activate the chosen application.
+
+          The activation_token option was introduced in version 4 of the interface.
 
         The OpenFile method was introduced in version 2 of the OpenURI portal API.
     -->
@@ -149,32 +128,26 @@
 
     <!--
         OpenDirectory:
-        @parent_window: Identifier for the application window, see <link linkend="parent_window">Common Conventions</link>
+        @parent_window: Identifier for the application window, see :ref:`Common Conventions <window-identifiers>`
         @fd: File descriptor for a file
         @options: Vardict with optional further information
-        @handle: Object path for the #org.freedesktop.portal.Request object representing this call
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
 
         Asks to open the directory containing a local file in the file browser.
 
         Supported keys in the @options vardict include:
-        <variablelist>
-          <varlistentry>
-            <term>handle_token s</term>
-            <listitem><para>
-              A string that will be used as the last element of the @handle. Must be a valid
-              object path element. See the #org.freedesktop.portal.Request documentation for
-              more information about the @handle.
-            </para></listitem>
-          </varlistentry>
-          <varlistentry>
-            <term>activation_token s</term>
-            <listitem><para>
-              A token that can be used to activate the chosen application.
-            </para><para>
-              The activation_token option was introduced in version 4 of the interface.
-            </para></listitem>
-          </varlistentry>
-        </variablelist>
+
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``activation_token`` (``s``)
+
+          A token that can be used to activate the chosen application.
+
+          The activation_token option was introduced in version 4 of the interface.
 
         The OpenDirectory method was introduced in version 3 of the OpenURI portal API.
     -->

@@ -3,7 +3,7 @@
 Before developing features or fixing bugs, please make sure you are have done
 the following:
 
-- Your code is not on the *main* branch of your fork
+- Your code is not on the _main_ branch of your fork
 - The code has been tested
 - All commit messages are properly formatted and commits squashed where
   appropriate
@@ -62,3 +62,19 @@ with `-Dlibportal=enabled`, and run:
 $ meson test -C _build
 ```
 
+### Building the documentation
+
+These instructions are for fedora, where you will need these packages:
+
+```
+sudo dnf install json-glib-devel fuse3-devel gdk-pixbuf2-devel pipewire-devel python3-sphinx flatpak-devel python3-furo python-sphinxext-opengraph python-sphinx-copybutton
+```
+
+Then you can build the website with:
+
+```
+meson setup . _build -Ddocumentation=enabled
+ninja -C _build
+```
+
+Then just load the build website into a browser of your choice from `_build/doc/html/index.html`
